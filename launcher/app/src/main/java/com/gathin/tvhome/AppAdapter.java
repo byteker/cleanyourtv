@@ -253,6 +253,11 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         // Copy before merging: LibraryApps.load() may return an immutable empty set (#419).
         Set<String> added = new HashSet<>(LibraryApps.load(ctx));
         added.addAll(libraryPreload);
+        // A launch action naming an activity is a deliberate tile (CVTE's tuner lives in a non-TV settings
+        // app), so show its package as if it had been added from the library.
+        for (Map.Entry<String, String> a : launchActions.entrySet()) {
+            if (ActivitySpec.split(a.getValue()) != null) added.add(a.getKey());
+        }
         Set<String> removed = LibraryApps.loadRemoved(ctx);
         if (!added.isEmpty()) {
             Set<String> seen = new HashSet<>(tvPackages);
@@ -481,9 +486,16 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         // already running resumes instead of restarting; only phone apps added from the library use plain MAIN.
         if (leanbackPackages.contains(e.pkg)) i.addCategory(Intent.CATEGORY_LEANBACK_LAUNCHER);
         String action = launchActions.get(e.pkg);
-        if (action != null) {
-            // NEW_TASK only: with RESET_TASK_IF_NEEDED, Android just brings a running task of the app to the front
-            // ("Activity not started"), so the screen never opens while the app is up, e.g. MagentaTV's boot-time task.
+        // NEW_TASK only: with RESET_TASK_IF_NEEDED, Android just brings a running task of the app to the front
+        // ("Activity not started"), so the screen never opens while the app is up, e.g. MagentaTV's boot-time task.
+        if (ActivitySpec.split(action) != null) {
+            // "package=package/.Activity": a screen that shares MAIN with others in its package, such as
+            // CVTE's TvSettingActivity (the tuner) inside the settings app.
+            ComponentName c = ActivitySpec.component(action);
+            Intent byComponent = new Intent(Intent.ACTION_MAIN).setComponent(c)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            if (c != null && ctx.getPackageManager().resolveActivity(byComponent, 0) != null) i = byComponent;
+        } else if (action != null) {
             Intent byAction = new Intent(action).setPackage(e.pkg).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             if (ctx.getPackageManager().resolveActivity(byAction, 0) != null) i = byAction;
         }

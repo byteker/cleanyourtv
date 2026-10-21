@@ -114,6 +114,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     private String liveTvPkg;
     /** Launcher settings' change count this Home was built with (see onResume). */
     private long settingsRevision;
+    /** Set when live_tv_package names an activity ("package/.Activity") instead of a package. */
+    private ComponentName liveTvComponent;
     /** Idle time on Home before ClockActivity; 0 is off (config.xml, home_idle_clock_minutes). */
     private long idleClockMs;
     private final Runnable showIdleClock = () -> startActivity(new Intent(this, ClockActivity.class));
@@ -372,6 +374,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         festival = cfg.festival;
         festive = festival.active(LocalDate.now());
         liveTvPkg = cfg.liveTvPackage;
+        // Some tuner screens are neither a leanback entry nor reachable by an action alone (CVTE's
+        // TvSettingActivity shares MAIN with two other activities in its package): name the activity then.
+        liveTvComponent = ActivitySpec.component(liveTvPkg);
+        if (liveTvComponent != null) liveTvPkg = liveTvComponent.getPackageName();
         idleClockMs = cfg.homeIdleClockMinutes * MINUTE_MS;
         bootToLiveTv = cfg.bootToLiveTv;
         liveTvAction = cfg.liveTvAction;
@@ -955,11 +961,15 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
 
     /** True when PackageManager reports apps changed since the last rebuild (one binder call). */
     private boolean packagesChangedSinceRebuild() {
+        // getChangedPackages is API 26. Below it the package broadcasts already mark TileRefresh stale, which is
+        // the pre-2.6 behaviour; saying "changed" here would rebuild (and flash) Home on every return from an app.
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return false;
         ChangedPackages changed = getPackageManager().getChangedPackages(packageSequence);
         return changed != null && !changed.getPackageNames().isEmpty();
     }
 
     private int currentPackageSequence(int since) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return since;
         ChangedPackages changed = getPackageManager().getChangedPackages(since);
         return changed != null ? changed.getSequenceNumber() : since;
     }
@@ -2580,9 +2590,13 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         return true;
     }
 
-    /** The Live TV app's launch intent: its leanback entry point, or the configured action if it has none. */
+    /** The Live TV app's launch intent: its named activity, its leanback entry point, or the configured action if it has none. */
     private Intent liveTvIntent() {
         if (liveTvPkg.isEmpty()) return null;
+        if (liveTvComponent != null) {
+            Intent byComponent = new Intent(Intent.ACTION_MAIN).setComponent(liveTvComponent);
+            return getPackageManager().resolveActivity(byComponent, 0) != null ? byComponent : null;
+        }
         Intent i = getPackageManager().getLeanbackLaunchIntentForPackage(liveTvPkg);
         if (i != null || liveTvAction.isEmpty()) return i;
         Intent byAction = new Intent(liveTvAction).setPackage(liveTvPkg);
